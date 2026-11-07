@@ -1,0 +1,179 @@
+{
+  "assistant_id": "066af2ae-953a-455f-a389-46b39df53815",
+  "assistant_name": "Outreach Booking Agent - Test",
+  "copied_from": "e51d6d02-eaf0-40d1-aec4-c6744ed3492c",
+  "structured_output_id": "0842d211-c7ca-46bb-b8fd-1a4067244dfe",
+  "prompt_file": "config/vapi_booking_assistant_prompt.md",
+  "note": "Server auth (X-Vapi-Secret header + credentialId) is copied from the update_lead_status tool and is not stored here. lead_status_tool_copy_id is the new assistant's own copy of that tool, so pointing it at a local tunnel never affects the old assistant.",
+  "tools": [
+    {
+      "id": "b978dd71-324c-4b71-a789-089978d03eaf",
+      "type": "function",
+      "async": false,
+      "function": {
+        "name": "find_slots",
+        "description": "Find the nearest open appointment times for this patient's initial evaluation. Call it after the patient has confirmed the clinic, therapist preference, last-name spelling and date of birth, and again whenever they ask for another day, week, time of day, therapist or clinic. Only offer times this tool returns. The reply starts with a code such as OPENINGS, NOTHING_IN_RANGE or NO_SUCH_THERAPIST.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "when": {
+              "description": "When the patient wants to come in. earliest when they have no preference. specific_date for one named day.",
+              "type": "string",
+              "enum": [
+                "earliest",
+                "today",
+                "tomorrow",
+                "this_week",
+                "next_week",
+                "in_two_weeks",
+                "specific_date"
+              ]
+            },
+            "location": {
+              "description": "Only if the patient wants a different clinic than the one on file: Clinic A, Clinic B or Clinic C.",
+              "type": "string"
+            },
+            "case_type": {
+              "description": "Only if the caller wants a different service than the one on file: the exact service name from the list of services we offer.",
+              "type": "string"
+            },
+            "time_of_day": {
+              "description": "Only if the patient asked for a part of the day.",
+              "type": "string",
+              "enum": [
+                "morning",
+                "afternoon",
+                "evening"
+              ]
+            },
+            "specific_date": {
+              "description": "Only with when=specific_date: the day as YYYY-MM-DD, worked out from the 'Calendar today' line in this tool's last reply.",
+              "type": "string"
+            },
+            "clinician_name": {
+              "description": "Only if the patient asked for a particular therapist: the name they said, for example 'Thao' or 'Dr. Rome'.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "when"
+          ]
+        }
+      },
+      "messages": [
+        {
+          "type": "request-start",
+          "content": "One moment, please, while I check our availability.",
+          "blocking": false
+        }
+      ],
+      "server": {
+        "url": "https://demo.example.com/api/v1/tools/find-slots",
+        "timeoutSeconds": 20
+      }
+    },
+    {
+      "id": "7036aca5-efdf-4ead-8a1e-bff0a047421c",
+      "type": "function",
+      "async": false,
+      "function": {
+        "name": "book_appointment",
+        "description": "Book the time the patient just chose from the open-times tool. Call it once, right after they pick a time. The reply starts with a code: BOOKED means it is done; TAKEN or NOT_AVAILABLE lists other openings; PATIENT_EXISTS, UNCONFIRMED or FOLLOW_UP mean the team will follow up. Never call it again after BOOKED, UNCONFIRMED or FOLLOW_UP.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "date": {
+              "description": "The chosen day as YYYY-MM-DD, from the parentheses in the open-times reply.",
+              "type": "string"
+            },
+            "time": {
+              "description": "The chosen time as the open-times reply wrote it, for example '9:00 AM'.",
+              "type": "string"
+            },
+            "email": {
+              "description": "Leave empty unless the patient gave it.",
+              "type": "string"
+            },
+            "location": {
+              "description": "Only if the patient changed clinic: Clinic A, Clinic B or Clinic C.",
+              "type": "string"
+            },
+            "case_type": {
+              "description": "Only if the caller wants a different service than the one on file: the exact service name from the list of services we offer.",
+              "type": "string"
+            },
+            "last_name": {
+              "description": "The patient's last name exactly as they spelled it.",
+              "type": "string"
+            },
+            "first_name": {
+              "description": "The patient's first name.",
+              "type": "string"
+            },
+            "date_of_birth": {
+              "description": "The patient's date of birth as YYYY-MM-DD.",
+              "type": "string"
+            },
+            "clinician_name": {
+              "description": "The full name of the therapist for the chosen time, as the open-times reply wrote it.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "date",
+            "time",
+            "first_name",
+            "last_name",
+            "date_of_birth"
+          ]
+        }
+      },
+      "messages": [
+        {
+          "type": "request-start",
+          "content": "Thank you. One moment, please, while I confirm your appointment.",
+          "blocking": false
+        }
+      ],
+      "server": {
+        "url": "https://demo.example.com/api/v1/tools/book-appointment",
+        "timeoutSeconds": 30
+      }
+    },
+    {
+      "id": "05041b28-6c91-4183-a387-7c676b70044e",
+      "type": "function",
+      "async": false,
+      "function": {
+        "name": "list_providers",
+        "description": "List the therapists the patient can see for their service at their clinic, with any credentials and short note on file. Call it when the patient asks who the therapists are, asks about a therapist, or asks for options. Answer only from what it returns.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "location": {
+              "description": "Only if the patient changed clinic: Clinic A, Clinic B or Clinic C.",
+              "type": "string"
+            },
+            "case_type": {
+              "description": "Only if the caller wants a different service than the one on file: the exact service name from the list of services we offer.",
+              "type": "string"
+            }
+          },
+          "required": []
+        }
+      },
+      "messages": [
+        {
+          "type": "request-start",
+          "content": "One moment, please.",
+          "blocking": false
+        }
+      ],
+      "server": {
+        "url": "https://demo.example.com/api/v1/tools/list-providers",
+        "timeoutSeconds": 15
+      }
+    }
+  ],
+  "lead_status_tool_copy_id": "5a076bad-c4c9-40b0-a5fb-ff6f59c6867b"
+}

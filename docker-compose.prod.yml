@@ -1,0 +1,133 @@
+# Production stack. Run with:
+#   docker compose -f docker-compose.prod.yml up -d --build
+# The dev docker-compose.yml stays for local work (mock provider, source mounts).
+services:
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile.prod
+    container_name: stride-api
+    restart: unless-stopped
+    env_file: .env
+    expose:
+      - "8000"
+    # Concurrent calls' tool requests run in parallel threads; 3 connections let
+    # three slow bookings starve every other request (DB allows 60).
+    environment:
+      DB_POOL_MAX_SIZE: "10"
+    # Let an in-flight booking (up to ~15 s on Stride) finish before a deploy stops it.
+    stop_grace_period: 30s
+    volumes:
+      - ./logs:/app/logs
+    # Liveness only. /ready also reports 503 while Stride booking is switched
+    # off for the practice, which is a deliberate state here; gating Caddy on
+    # it took the whole site down.
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+
+  # Exactly one worker: the rate governors are process-local.
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile.prod
+    container_name: stride-worker
+    restart: unless-stopped
+    env_file: .env
+    command: rpt-worker
+    volumes:
+      - ./logs:/app/logs
+
+  # Separate from patient outreach: a slow Google/n8n request can never delay
+  # a due call or SMS. It idles safely while SHEET_SYNC_ENABLED=false.
+  sheet-worker:
+    build:
+      context: .
+      dockerfile: Dockerfile.prod
+    container_name: stride-sheet-worker
+    restart: unless-stopped
+    env_file: .env
+    command: rpt-sheet-worker
+    volumes:
+      - ./logs:/app/logs
+      # Google service account key for SHEET_SYNC_MODE=direct. Kept outside the repo (never
+      # committed) and mounted read-only; unused in n8n mode.
+      - /home/ubuntu/stride-secrets/google-sheet-sa.json:/run/secrets/google-sheet-sa.json:ro
+
+  # Keap contact sync (phase 2B). Separate so a slow or rate-limited Keap can never
+  # delay calls/SMS, the Sheet or the Stride import. Idles while KEAP_SYNC_ENABLED=false.
+  keap-worker:
+    build:
+      context: .
+      dockerfile: Dockerfile.prod
+    container_name: stride-keap-worker
+    restart: unless-stopped
+    mem_limit: 256m
+    env_file: .env
+    command: rpt-keap-worker
+    # One pooled connection is plenty; the advisory lock holds a second while sync is on.
+    environment:
+      DB_POOL_MAX_SIZE: "1"
+    volumes:
+      - ./logs:/app/logs
+
+  # Stride CSV import. The only container that sees the SFTP folders: it reads
+  # Stride's uploads and moves each one to archive or error (so not read-only).
+  # Keeps the voice-agent slot cache fresh from Stride (every BOOKING_SYNC_SECONDS).
+  # Separate so a slow Stride never delays calls/SMS or the import. Idles when no
+  # clinic, case type or clinician is set up.
+  booking-worker:
+    build:
+      context: .
+      dockerfile: Dockerfile.prod
+    container_name: stride-booking-worker
+    restart: unless-stopped
+    mem_limit: 256m
+    env_file: .env
+    command: rpt-booking-worker
+    volumes:
+      - ./logs:/app/logs
+
+  # The host cron deletes archive/error files after 30 days.
+  stride-worker:
+    build:
+      context: .
+      dockerfile: Dockerfile.prod
+    container_name: stride-import-worker
+    restart: unless-stopped
+    # The importer streams files (flat memory), but if it ever misbehaves only
+    # this container is killed, never the API or the call/SMS worker.
+    mem_limit: 512m
+    env_file: .env
+    command: rpt-stride-worker
+    environment:
+      STRIDE_INBOX_DIR: /app/stride/incoming
+      STRIDE_ARCHIVE_DIR: /app/stride/archive
+      STRIDE_ERROR_DIR: /app/stride/error
+    volumes:
+      - ./logs:/app/logs
+      - /srv/sftp/stride/incoming:/app/stride/incoming
+      - /srv/stride/archive:/app/stride/archive
+      - /srv/stride/error:/app/stride/error
+
+  caddy:
+    image: caddy:2.11.4-alpine
+    container_name: stride-caddy
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      api:
+        condition: service_healthy
+
+volumes:
+  caddy_data:
+  caddy_config:
